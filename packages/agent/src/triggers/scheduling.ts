@@ -40,6 +40,26 @@ export {
 };
 
 export const MAX_TRIGGER_RUN_HISTORY = 100;
+const MAX_EVENT_FILTER_DEPTH = 8;
+
+function isJsonEventFilter(value: unknown, depth = 0): boolean {
+  if (depth > MAX_EVENT_FILTER_DEPTH) return false;
+  if (
+    value === null ||
+    typeof value === "string" ||
+    typeof value === "boolean"
+  ) {
+    return true;
+  }
+  if (typeof value === "number") return Number.isFinite(value);
+  if (Array.isArray(value)) {
+    return value.every((item) => isJsonEventFilter(item, depth + 1));
+  }
+  if (typeof value !== "object") return false;
+  return Object.values(value).every((item) =>
+    isJsonEventFilter(item, depth + 1),
+  );
+}
 
 interface DraftInput {
   displayName?: string;
@@ -54,6 +74,7 @@ interface DraftInput {
   scheduledAtIso?: string;
   cronExpression?: string;
   eventKind?: string;
+  eventFilter?: Record<string, unknown>;
   maxRuns?: number;
   kind?: TriggerKind;
   workflowId?: string;
@@ -95,6 +116,7 @@ export function buildTriggerDedupeKey(parts: {
   scheduledAtIso?: string;
   cronExpression?: string;
   eventKind?: string;
+  eventFilter?: Record<string, unknown>;
   wakeMode: TriggerWakeMode;
   kind: TriggerKind;
   workflowId?: string;
@@ -106,6 +128,7 @@ export function buildTriggerDedupeKey(parts: {
     parts.scheduledAtIso ?? "",
     parts.cronExpression ?? "",
     parts.eventKind ?? "",
+    JSON.stringify(parts.eventFilter ?? {}),
     parts.wakeMode,
     parts.kind,
     parts.workflowId ?? "",
@@ -149,6 +172,10 @@ export function buildTriggerConfig(params: {
         : undefined,
     eventKind:
       params.draft.triggerType === "event" ? params.draft.eventKind : undefined,
+    eventFilter:
+      params.draft.triggerType === "event"
+        ? params.draft.eventFilter
+        : undefined,
     maxRuns: params.draft.maxRuns,
     runCount: previous?.runCount ?? 0,
     dedupeKey: buildTriggerDedupeKey({
@@ -158,6 +185,7 @@ export function buildTriggerConfig(params: {
       scheduledAtIso: params.draft.scheduledAtIso,
       cronExpression: params.draft.cronExpression,
       eventKind: params.draft.eventKind,
+      eventFilter: params.draft.eventFilter,
       wakeMode: params.draft.wakeMode,
       kind: params.draft.kind,
       workflowId: params.draft.workflowId,
@@ -243,6 +271,7 @@ export function normalizeTriggerDraft(params: {
   const scheduledAtIso = params.input.scheduledAtIso?.trim();
   const cronExpression = params.input.cronExpression?.trim();
   const eventKind = params.input.eventKind?.trim();
+  const eventFilter = params.input.eventFilter;
   const maxRuns =
     typeof params.input.maxRuns === "number"
       ? Math.floor(params.input.maxRuns)
@@ -307,6 +336,9 @@ export function normalizeTriggerDraft(params: {
     if (!eventKind) {
       return { error: "eventKind is required for event triggers" };
     }
+    if (eventFilter !== undefined && !isJsonEventFilter(eventFilter)) {
+      return { error: "eventFilter must be finite JSON with at most 8 levels" };
+    }
     return {
       draft: {
         displayName,
@@ -318,6 +350,7 @@ export function normalizeTriggerDraft(params: {
         notifyOnOutcome,
         timezone,
         eventKind,
+        eventFilter,
         maxRuns,
         kind,
         workflowId,
