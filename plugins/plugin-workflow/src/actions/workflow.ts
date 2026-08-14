@@ -85,6 +85,7 @@ export const workflowAction: Action = {
     'DELETE_AUTOMATION',
     'RUN_AUTOMATION',
     'CREATE_WORKFLOW',
+    'WORKFLOW_CREATE',
     'EDIT_WORKFLOW',
     'UPDATE_WORKFLOW',
     'DELETE_WORKFLOW',
