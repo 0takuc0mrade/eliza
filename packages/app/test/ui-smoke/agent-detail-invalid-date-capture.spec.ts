@@ -8,16 +8,30 @@
  */
 import { expect, test } from "@playwright/test";
 import {
+  expectNoPageDiagnostics,
+  installDefaultAppRoutes,
+  installPageDiagnosticsGuard,
+} from "./helpers";
+import {
   installCloudApiStubs,
   seedStewardToken,
 } from "./helpers/cloud-audit-fixtures";
 
 test.use({ video: "on" });
 
+test.beforeEach(({ page }) => {
+  installPageDiagnosticsGuard(page);
+});
+
+test.afterEach(async ({ page }, testInfo) => {
+  await expectNoPageDiagnostics(page, testInfo.title);
+});
+
 test("agent detail page renders explicit fallbacks for a malformed agent timestamp", async ({
   page,
 }) => {
   await seedStewardToken(page);
+  await installDefaultAppRoutes(page);
   await installCloudApiStubs(page);
   await page.route("**/api/v1/eliza/agents/agent-smoke-1", async (route) => {
     await route.fulfill({
