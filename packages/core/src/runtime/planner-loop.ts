@@ -226,9 +226,31 @@ interface RawPlannerOutput {
 export async function runPlannerLoop(
 	params: PlannerLoopParams,
 ): Promise<PlannerLoopResult> {
-	const result = await runPlannerLoopIterations(params);
-	const honest = await ensureFailedTurnFinalMessage(params, result);
-	return ensureToolTurnFinalMessage(params, honest);
+	const usage = { promptTokens: 0, completionTokens: 0, modelCalls: 0 };
+	const maxPromptTokens = mergeChainingLoopConfig(
+		params.config,
+	).maxTrajectoryPromptTokens;
+	const observeModelUsage = (sample: {
+		promptTokens: number;
+		completionTokens: number;
+	}): void => {
+		usage.promptTokens += sample.promptTokens;
+		usage.completionTokens += sample.completionTokens;
+		usage.modelCalls += 1;
+		params.onModelUsage?.(sample);
+		if (usage.promptTokens > maxPromptTokens) {
+			throw new TrajectoryLimitExceeded({
+				kind: "trajectory_token_budget",
+				max: maxPromptTokens,
+				observed: usage.promptTokens,
+			});
+		}
+	};
+	const trackedParams = { ...params, onModelUsage: observeModelUsage };
+	const result = await runPlannerLoopIterations(trackedParams);
+	const honest = await ensureFailedTurnFinalMessage(trackedParams, result);
+	const final = await ensureToolTurnFinalMessage(trackedParams, honest);
+	return { ...final, modelUsage: usage };
 }
 
 async function runPlannerLoopIterations(
@@ -323,23 +345,11 @@ async function runPlannerLoopIterations(
 	// counters (terminalOnlyContinuations, requiredToolMisses) so the
 	// `maxTrajectoryPromptTokens` guard fires on the very call that crosses
 	// the threshold rather than at the next-iteration check-in.
-	let cumulativePromptTokens = 0;
 	const observePlannerUsage = (usage: {
 		promptTokens: number;
 		completionTokens: number;
 	}): void => {
-		cumulativePromptTokens += usage.promptTokens;
-		if (cumulativePromptTokens > config.maxTrajectoryPromptTokens) {
-			throw new TrajectoryLimitExceeded({
-				kind: "trajectory_token_budget",
-				max: config.maxTrajectoryPromptTokens,
-				observed: cumulativePromptTokens,
-				message:
-					`Trajectory prompt-token budget exceeded ` +
-					`(${cumulativePromptTokens}/${config.maxTrajectoryPromptTokens}) — ` +
-					`this turn is most likely stuck in a replan loop; aborting to bound cost.`,
-			});
-		}
+		params.onModelUsage?.(usage);
 	};
 	// Tracks the most recent planner output's *explicit* `messageToUser` so the
 	// post-tool evaluator gate can use it as the final response when the
@@ -2591,6 +2601,7 @@ async function evaluateTrajectory(
 		trajectoryId: params.trajectoryId,
 		parentStageId: params.parentStageId,
 		iteration,
+		onUsage: params.onModelUsage,
 	});
 }
 
@@ -3872,6 +3883,7 @@ async function ensureToolTurnFinalMessage(
 				"Do not call any tool. Write the final answer to the user now from the tool " +
 				"results already in this trajectory; if they do not contain the answer, say " +
 				"plainly what you found and what was missing.",
+			onUsage: params.onModelUsage,
 		});
 		const finalMessage = synthesized.finalMessage;
 		const synthesizedUsable =
@@ -3960,6 +3972,7 @@ async function ensureFailedTurnFinalMessage(
 			iteration,
 			instruction,
 			failureAware: true,
+			onUsage: params.onModelUsage,
 		});
 		const finalMessage = synthesized.finalMessage;
 		const synthesizedUsable =
@@ -4082,6 +4095,16 @@ async function rescueReplyFromSuccessfulResults(
 			],
 			maxTokens: 1024,
 		});
+		const usage = extractUsage(raw);
+		if (
+			usage?.promptTokens !== undefined &&
+			usage.completionTokens !== undefined
+		) {
+			params.onModelUsage?.({
+				promptTokens: usage.promptTokens,
+				completionTokens: usage.completionTokens,
+			});
+		}
 		const text =
 			typeof raw === "string" ? raw : (raw as { text?: string })?.text;
 		return userSafeRescueReply(text, trajectory);
