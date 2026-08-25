@@ -34,6 +34,7 @@ import {
 import { ElizaError as ScriptElizaError } from "./lib/eliza-error.mjs";
 import {
   assertAndroidArtifactOmitsLp3ManifestMarkers,
+  assertAndroidArtifactRetainsBackgroundRunnerJniBridge,
   assertAndroidArtifactShipsWebPayload,
   assertAndroidArtifactSnapshotUnchanged,
   auditAndroidArtifactDexLp3Policy,
@@ -1614,6 +1615,46 @@ describe("Android APK audit regression contract", () => {
       ["classes.dex"],
       JAVA_HOME,
       { label: "LP3 policy DEX audit" },
+    );
+  });
+
+  it("requires the Background Runner class resolved through JNI", () => {
+    const readEntryBuffers = vi
+      .fn()
+      .mockReturnValueOnce([
+        Buffer.from("io/ionic/android_js_engine/NativeWebAPI", "utf8"),
+      ])
+      .mockReturnValueOnce([Buffer.from("unrelated classes", "utf8")]);
+    const entries = ["classes.dex", "classes2.dex"];
+
+    expect(() =>
+      assertAndroidArtifactRetainsBackgroundRunnerJniBridge(
+        "/artifacts/app-release.apk",
+        entries,
+        JAVA_HOME,
+        { label: "android-system" },
+        { readEntryBuffers },
+      ),
+    ).not.toThrow();
+    expect(() =>
+      assertAndroidArtifactRetainsBackgroundRunnerJniBridge(
+        "/artifacts/app-release.apk",
+        entries,
+        JAVA_HOME,
+        { label: "android-system" },
+        { readEntryBuffers },
+      ),
+    ).toThrow(
+      expect.objectContaining({
+        code: "ANDROID_BACKGROUND_RUNNER_JNI_CLASS_MISSING",
+        context: expect.objectContaining({ label: "android-system" }),
+      }),
+    );
+    expect(readEntryBuffers).toHaveBeenCalledWith(
+      "/artifacts/app-release.apk",
+      entries,
+      JAVA_HOME,
+      { label: "Background Runner JNI DEX audit" },
     );
   });
 

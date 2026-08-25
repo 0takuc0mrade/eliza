@@ -7888,6 +7888,12 @@ function auditAndroidSideloadArtifact({ javaHome } = {}) {
     );
   }
   const entries = listAndroidArtifactEntries(artifact, javaHome);
+  assertAndroidArtifactRetainsBackgroundRunnerJniBridge(
+    artifact,
+    entries,
+    javaHome,
+    { label: "android sideload" },
+  );
   assertAndroidArtifactShipsWebPayload(artifact, entries, {
     requireAgent: true,
     label: "android",
@@ -7947,6 +7953,12 @@ function auditAndroidHostE2eArtifact({ javaHome } = {}) {
     );
   }
   const entries = listAndroidArtifactEntries(artifact, javaHome);
+  assertAndroidArtifactRetainsBackgroundRunnerJniBridge(
+    artifact,
+    entries,
+    javaHome,
+    { label: "android host-e2e" },
+  );
   assertAndroidArtifactShipsWebPayload(artifact, entries, {
     requireAgent: false,
     label: "android-host-e2e",
@@ -7982,6 +7994,12 @@ function auditAndroidSystemArtifact({ androidSdkRoot, javaHome } = {}) {
     );
   }
   const entries = listAndroidArtifactEntries(artifact, javaHome);
+  assertAndroidArtifactRetainsBackgroundRunnerJniBridge(
+    artifact,
+    entries,
+    javaHome,
+    { label: "android-system" },
+  );
   const aapt = resolveAndroidBuildTool(androidSdkRoot, "aapt");
   if (!aapt) {
     throw mobileBuildError(
@@ -8667,6 +8685,48 @@ export function auditAndroidArtifactDexLp3Policy(
         markerFindings.map((marker) => `  - ${marker}`).join("\n"),
     );
   }
+}
+
+/**
+ * Require the Background Runner Java class that its native JS engine resolves
+ * through JNI. R8 cannot infer this edge from Java bytecode, so a missing class
+ * is a release-startup crash rather than a safely unused implementation detail.
+ */
+export function assertAndroidArtifactRetainsBackgroundRunnerJniBridge(
+  artifact,
+  entries,
+  javaHome,
+  { label = "Android" } = {},
+  { readEntryBuffers = readAndroidArtifactEntryBuffers } = {},
+) {
+  const dexEntries = entries.filter((entry) =>
+    /(^|\/)classes\d*\.dex$/.test(entry),
+  );
+  if (dexEntries.length === 0) {
+    throw mobileBuildError(
+      `[mobile-build] Android artifact has no classes*.dex entries: ${artifact}`,
+      {
+        code: "ANDROID_ARTIFACT_DEX_MISSING",
+        context: { artifact, label },
+      },
+    );
+  }
+
+  const marker = "io/ionic/android_js_engine/NativeWebAPI";
+  const dexBuffers = readEntryBuffers(artifact, dexEntries, javaHome, {
+    label: "Background Runner JNI DEX audit",
+  });
+  if (dexBuffers.some((dex) => dex.includes(Buffer.from(marker, "utf8")))) {
+    return;
+  }
+
+  throw mobileBuildError(
+    `[mobile-build] ${label} artifact DEX is missing the Background Runner JNI class ${marker.replaceAll("/", ".")}.`,
+    {
+      code: "ANDROID_BACKGROUND_RUNNER_JNI_CLASS_MISSING",
+      context: { artifact, label, marker },
+    },
+  );
 }
 
 function findAndroidManifestElementBlock(
